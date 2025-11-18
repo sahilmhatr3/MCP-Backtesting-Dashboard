@@ -33,3 +33,5 @@ htmlcov/
 *.swo
 *~
 
+test_adapters.py
+test_openai.py
