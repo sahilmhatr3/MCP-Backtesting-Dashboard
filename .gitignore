@@ -36,3 +36,5 @@ htmlcov/
 test_adapters.py
 test_openai.py
 test_strategies.py
+test_engine.py
+test_engine_comprehensive.py
