@@ -77,18 +77,41 @@ streamlit run app.py
 ## Project Structure
 
 ```
-├── app.py                 # Main Streamlit application
+├── app.py                 # Main Streamlit application entry point
+├── requirements.txt       # Python dependencies
+├── .env.example          # Environment variables template
+│
 ├── adapters/              # Data source adapters
 │   ├── yfinance_adapter.py
 │   ├── news_adapter.py
 │   └── sentiment_adapter.py
+│
 ├── strategies/            # Trading strategies
 │   └── prebuilt.py
+│
 ├── backtest/              # Backtesting engine
 │   └── engine.py
+│
 ├── llm/                   # LLM integration
 │   └── openai_client.py
-└── requirements.txt      # Python dependencies
+│
+├── utils/                 # Utility modules
+│   ├── data_fetchers.py   # Data fetching orchestration
+│   └── ui_components.py   # UI rendering components
+│
+├── config/                # Configuration files
+│   └── static_flows.py    # Pre-configured demo scenarios
+│
+├── tests/                 # Test files
+│   ├── test_adapters.py
+│   ├── test_engine.py
+│   ├── test_openai.py
+│   └── ...
+│
+└── images/                # Screenshots and assets
+    ├── BacktestDash-Home.png
+    ├── BacktestDash-Bollinger.png
+    └── BacktestDash-StrategyInsights.png
 ```
 
 

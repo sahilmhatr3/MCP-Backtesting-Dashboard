@@ -4,9 +4,8 @@ from datetime import datetime, timedelta
 
 from strategies.prebuilt import get_strategy_class, get_strategy_params
 from backtest.engine import BacktestEngine
-import static_flows
-import ui_components
-import data_fetchers
+from config import static_flows
+from utils import ui_components, data_fetchers
 
 
 st.set_page_config(
