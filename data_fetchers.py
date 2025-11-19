@@ -31,7 +31,7 @@ def fetch_market_data(tickers: List[str], start_date: datetime, end_date: dateti
 
 
 def fetch_sentiment_data(tickers: List[str], start_date: datetime, end_date: datetime) -> List[dict]:
-    """Fetch and analyze sentiment data."""
+    """Fetch and analyze sentiment data with full article details."""
     news_adapter = NewsAdapter()
     sentiment_adapter = SentimentAdapter()
     
@@ -42,7 +42,8 @@ def fetch_sentiment_data(tickers: List[str], start_date: datetime, end_date: dat
             articles = news_adapter.get_news(
                 ticker,
                 start_date.strftime("%Y-%m-%d"),
-                end_date.strftime("%Y-%m-%d")
+                end_date.strftime("%Y-%m-%d"),
+                max_articles=100
             )
             
             if articles:
@@ -54,6 +55,8 @@ def fetch_sentiment_data(tickers: List[str], start_date: datetime, end_date: dat
                         all_sentiment.append({
                             'date': article.get('date', ''),
                             'headline': article.get('headline', ''),
+                            'source': article.get('source', 'Unknown'),
+                            'url': article.get('url', ''),
                             'sentiment': sentiment_results[i].get('sentiment', 'neutral'),
                             'ticker': ticker
                         })

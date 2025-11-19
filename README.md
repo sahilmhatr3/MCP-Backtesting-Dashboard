@@ -1,14 +1,14 @@
 # MCP Backtesting Dashboard
 
-A modular dashboard for equity strategy backtesting, integrating market data, media-scraped sentiment, and LLM-generated reports using a multi-adapter MCP-style architecture.
+A modular dashboard for equity strategy backtesting, integrating market data, news sentiment analysis, and strategy performance insights using a multi-adapter architecture.
 
 ## Features
 
 - Multi-source data integration (market prices via yfinance, news scraping)
-- Sentiment analysis using OpenAI API
+- Sentiment analysis integration
 - Backtesting engine with Backtrader
 - Pre-built trading strategies
-- LLM-powered result explanations
+- Strategy performance insights
 - Interactive Streamlit dashboard
 
 ## Setup
@@ -78,26 +78,14 @@ streamlit run app.py
 │   └── prebuilt.py
 ├── backtest/              # Backtesting engine
 │   └── engine.py
-├── llm/                   # OpenAI integration
+├── llm/                   # LLM integration
 │   └── openai_client.py
 └── requirements.txt      # Python dependencies
 ```
 
-## Testing
 
-Test the adapters:
-```bash
-python3 test_adapters.py
-```
-
-Test OpenAI integration:
-```bash
-python3 test_openai.py
-```
-
-## Credits
+## Dependencies
 
 - Market data: yfinance
 - Backtesting: Backtrader
-- LLM: OpenAI API
 - News scraping: BeautifulSoup, requests

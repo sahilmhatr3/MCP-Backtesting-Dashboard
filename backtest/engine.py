@@ -5,6 +5,102 @@ from typing import Dict, List, Optional, Type
 from datetime import datetime
 
 
+class TradeListAnalyzer(bt.Analyzer):
+    """Analyzer to track individual trades."""
+    
+    def __init__(self):
+        self.trades = []
+    
+    def notify_trade(self, trade):
+        """Called when a trade is closed."""
+        if trade.isclosed:
+            entry_date = ''
+            exit_date = ''
+            entry_price = 0
+            exit_price = 0
+            size = 0
+            
+            try:
+                if hasattr(trade, 'dtopen'):
+                    dt_open = trade.dtopen
+                    if hasattr(dt_open, 'date'):
+                        entry_date = dt_open.date().isoformat()
+                    elif hasattr(dt_open, 'num'):
+                        entry_date = pd.Timestamp.fromordinal(int(dt_open.num)).date().isoformat()
+                    elif isinstance(dt_open, (int, float)):
+                        entry_date = pd.Timestamp.fromordinal(int(dt_open)).date().isoformat()
+                    else:
+                        entry_date = str(dt_open)
+                
+                if hasattr(trade, 'dtclose'):
+                    dt_close = trade.dtclose
+                    if hasattr(dt_close, 'date'):
+                        exit_date = dt_close.date().isoformat()
+                    elif hasattr(dt_close, 'num'):
+                        exit_date = pd.Timestamp.fromordinal(int(dt_close.num)).date().isoformat()
+                    elif isinstance(dt_close, (int, float)):
+                        exit_date = pd.Timestamp.fromordinal(int(dt_close)).date().isoformat()
+                    else:
+                        exit_date = str(dt_close)
+            except Exception:
+                pass
+            
+            entry_price = 0
+            exit_price = 0
+            size = 0
+            
+            if hasattr(trade, 'size') and trade.size:
+                size = abs(int(trade.size))
+            
+            if hasattr(trade, 'price') and trade.price:
+                entry_price = round(float(trade.price), 2)
+            elif hasattr(trade, 'value') and size > 0:
+                try:
+                    entry_price = round(float(trade.value) / size, 2)
+                except:
+                    entry_price = 0
+            elif hasattr(trade, 'data') and hasattr(trade.data, 'close'):
+                try:
+                    entry_price = round(float(trade.data.close[0]), 2)
+                except:
+                    entry_price = 0
+            
+            pnl = round(float(trade.pnl), 2) if hasattr(trade, 'pnl') and trade.pnl else 0
+            pnlcomm = round(float(trade.pnlcomm), 2) if hasattr(trade, 'pnlcomm') and trade.pnlcomm else pnl
+            duration = int(trade.barlen) if hasattr(trade, 'barlen') and trade.barlen else 0
+            
+            if size == 0 and entry_price > 0:
+                size = abs(int(10000 / entry_price)) if entry_price > 0 else 100
+            
+            if size > 0 and entry_price > 0:
+                if pnlcomm != 0:
+                    exit_price = round(entry_price + (pnlcomm / size), 2)
+                else:
+                    exit_price = entry_price
+            elif hasattr(trade, 'data') and hasattr(trade.data, 'close'):
+                try:
+                    exit_price = round(float(trade.data.close[0]), 2)
+                except:
+                    exit_price = 0
+            
+            pnl_pct = 0
+            if entry_price > 0 and size > 0:
+                cost_basis = entry_price * size
+                if cost_basis > 0:
+                    pnl_pct = round((pnlcomm / cost_basis) * 100, 2)
+            
+            self.trades.append({
+                'entry_date': entry_date,
+                'exit_date': exit_date,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'pnl': pnlcomm,
+                'pnl_pct': pnl_pct,
+                'size': size,
+                'duration': duration
+            })
+
+
 class BacktestEngine:
     """Engine for running backtests using Backtrader."""
     
@@ -41,6 +137,10 @@ class BacktestEngine:
         try:
             cerebro = bt.Cerebro()
             
+            ticker = None
+            if 'Ticker' in data.columns:
+                ticker = data['Ticker'].iloc[0] if not data.empty else None
+            
             if 'Date' in data.columns:
                 data = data.set_index('Date')
             
@@ -60,19 +160,29 @@ class BacktestEngine:
             cerebro.adddata(bt_data)
             
             if sentiment_data and strategy_class.__name__ == 'SentimentStrategy':
-                strategy_instance = strategy_class(**parameters)
-                strategy_instance.set_sentiment_data(sentiment_data)
-                cerebro.addstrategy(strategy_class, **parameters)
+                filtered_sentiment = sentiment_data
+                if ticker:
+                    filtered_sentiment = [item for item in sentiment_data if item.get('ticker') == ticker]
+                
+                class SentimentStrategyWrapper(strategy_class):
+                    def __init__(self, *args, **kwargs):
+                        super().__init__(*args, **kwargs)
+                        self.set_sentiment_data(filtered_sentiment)
+                
+                cerebro.addstrategy(SentimentStrategyWrapper, **parameters)
             else:
                 cerebro.addstrategy(strategy_class, **parameters)
             
             cerebro.broker.setcash(self.initial_cash)
             cerebro.broker.setcommission(commission=self.commission)
             
-            cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
+            cerebro.addsizer(bt.sizers.PercentSizer, percents=98)
+            
+            cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', riskfreerate=0.0, annualize=True)
             cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
             cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
             cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+            cerebro.addanalyzer(TradeListAnalyzer, _name='tradelist')
             
             results = cerebro.run()
             strategy = results[0]
@@ -88,6 +198,11 @@ class BacktestEngine:
     
     def _extract_trades(self, strategy: bt.Strategy) -> pd.DataFrame:
         """Extract trade log from strategy."""
+        if hasattr(strategy, 'analyzers') and hasattr(strategy.analyzers, 'tradelist'):
+            tradelist = strategy.analyzers.tradelist
+            if hasattr(tradelist, 'trades') and tradelist.trades:
+                return pd.DataFrame(tradelist.trades)
+        
         trades = []
         
         if hasattr(strategy, 'analyzers') and hasattr(strategy.analyzers, 'trades'):
@@ -98,55 +213,45 @@ class BacktestEngine:
                     total_trades = rets.get('total', {}).get('total', 0) if isinstance(rets.get('total'), dict) else 0
                     
                     if total_trades > 0:
-                        won = rets.get('won', {})
-                        lost = rets.get('lost', {})
+                        total_won = rets.get('won', {}).get('total', 0) if isinstance(rets.get('won'), dict) else 0
+                        total_lost = rets.get('lost', {}).get('total', 0) if isinstance(rets.get('lost'), dict) else 0
                         
-                        if isinstance(won, dict) and 'total' in won:
-                            for i in range(won.get('total', 0)):
-                                trades.append({
-                                    'entry_date': '',
-                                    'exit_date': '',
-                                    'entry_price': 0,
-                                    'exit_price': 0,
-                                    'pnl': won.get('pnl', {}).get('average', 0) if isinstance(won.get('pnl'), dict) else 0,
-                                    'pnl_pct': 0,
-                                    'size': 0,
-                                    'duration': 0
-                                })
+                        avg_win = rets.get('won', {}).get('pnl', {}).get('average', 0) if isinstance(rets.get('won', {}).get('pnl'), dict) else 0
+                        avg_loss = rets.get('lost', {}).get('pnl', {}).get('average', 0) if isinstance(rets.get('lost', {}).get('pnl'), dict) else 0
                         
-                        if isinstance(lost, dict) and 'total' in lost:
-                            for i in range(lost.get('total', 0)):
-                                trades.append({
-                                    'entry_date': '',
-                                    'exit_date': '',
-                                    'entry_price': 0,
-                                    'exit_price': 0,
-                                    'pnl': lost.get('pnl', {}).get('average', 0) if isinstance(lost.get('pnl'), dict) else 0,
-                                    'pnl_pct': 0,
-                                    'size': 0,
-                                    'duration': 0
-                                })
+                        for i in range(total_won):
+                            trades.append({
+                                'entry_date': '',
+                                'exit_date': '',
+                                'entry_price': 0,
+                                'exit_price': 0,
+                                'pnl': round(avg_win, 2),
+                                'pnl_pct': 0,
+                                'size': 0,
+                                'duration': 0
+                            })
+                        
+                        for i in range(total_lost):
+                            trades.append({
+                                'entry_date': '',
+                                'exit_date': '',
+                                'entry_price': 0,
+                                'exit_price': 0,
+                                'pnl': round(avg_loss, 2),
+                                'pnl_pct': 0,
+                                'size': 0,
+                                'duration': 0
+                            })
         
         return pd.DataFrame(trades)
     
     def _calculate_statistics(self, strategy: bt.Strategy, trade_log: pd.DataFrame) -> Dict:
         """Calculate backtest statistics."""
         final_value = strategy.broker.getvalue()
-        total_return = ((final_value - self.initial_cash) / self.initial_cash) * 100
-        
-        sharpe_ratio = 0.0
-        if hasattr(strategy, 'analyzers') and hasattr(strategy.analyzers, 'sharpe'):
-            sharpe = strategy.analyzers.sharpe
-            if hasattr(sharpe, 'ratio'):
-                sharpe_ratio = sharpe.ratio if sharpe.ratio and not np.isnan(sharpe.ratio) else 0.0
-        
-        max_drawdown = 0.0
-        max_drawdown_pct = 0.0
-        if hasattr(strategy, 'analyzers') and hasattr(strategy.analyzers, 'drawdown'):
-            dd = strategy.analyzers.drawdown
-            if hasattr(dd, 'max'):
-                max_drawdown = abs(dd.max.drawdown) if dd.max.drawdown else 0.0
-                max_drawdown_pct = abs(dd.max.drawdown) if dd.max.drawdown else 0.0
+        if self.initial_cash > 0:
+            total_return = ((final_value - self.initial_cash) / self.initial_cash) * 100
+        else:
+            total_return = 0.0
         
         total_trades = len(trade_log) if not trade_log.empty else 0
         
@@ -166,6 +271,9 @@ class BacktestEngine:
         
         profit_factor = (avg_win * winning_trades) / (avg_loss * losing_trades) if avg_loss > 0 and losing_trades > 0 else 0.0
         
+        max_drawdown, max_drawdown_pct = self._calculate_max_drawdown(strategy, trade_log)
+        sharpe_ratio = self._calculate_sharpe_ratio(strategy, trade_log)
+        
         return {
             'initial_cash': self.initial_cash,
             'final_value': round(final_value, 2),
@@ -184,4 +292,79 @@ class BacktestEngine:
             'avg_loss': round(avg_loss, 2),
             'profit_factor': round(profit_factor, 2)
         }
+    
+    def _calculate_max_drawdown(self, strategy: bt.Strategy, trade_log: pd.DataFrame) -> tuple[float, float]:
+        """Calculate max drawdown from Backtrader analyzer or trade log."""
+        if hasattr(strategy, 'analyzers') and hasattr(strategy.analyzers, 'drawdown'):
+            dd = strategy.analyzers.drawdown
+            try:
+                if hasattr(dd, 'rets') and dd.rets:
+                    rets = dd.rets
+                    if 'max' in rets:
+                        max_info = rets['max']
+                        max_dd_pct = 0.0
+                        max_dd = 0.0
+                        
+                        if 'drawdown' in max_info:
+                            drawdown_val = float(max_info['drawdown'])
+                            if abs(drawdown_val) <= 1.0:
+                                max_dd_pct = abs(drawdown_val) * 100
+                            elif abs(drawdown_val) <= 100.0:
+                                max_dd_pct = abs(drawdown_val)
+                            else:
+                                max_dd_pct = min(abs(drawdown_val) / 100, 100.0)
+                        
+                        if 'moneydown' in max_info:
+                            max_dd = abs(float(max_info['moneydown']))
+                        
+                        if max_dd_pct > 0 or max_dd > 0:
+                            if max_dd_pct == 0 and max_dd > 0:
+                                max_dd_pct = (max_dd / self.initial_cash) * 100
+                            
+                            max_dd_pct = min(max_dd_pct, 100.0)
+                            return max_dd, max_dd_pct
+            except Exception as e:
+                pass
+        
+        if trade_log.empty or 'pnl' not in trade_log.columns:
+            return 0.0, 0.0
+        
+        equity = self.initial_cash
+        peak_equity = self.initial_cash
+        max_dd = 0.0
+        max_dd_pct = 0.0
+        
+        for _, trade in trade_log.iterrows():
+            equity += trade['pnl']
+            if equity < 0:
+                equity = 0
+            
+            if equity > peak_equity:
+                peak_equity = equity
+            
+            if peak_equity > 0:
+                drawdown = peak_equity - equity
+                drawdown_pct = (drawdown / peak_equity * 100)
+                
+                if drawdown > max_dd:
+                    max_dd = drawdown
+                    max_dd_pct = min(drawdown_pct, 100.0)
+        
+        return max_dd, max_dd_pct
+    
+    def _calculate_sharpe_ratio(self, strategy: bt.Strategy, trade_log: pd.DataFrame) -> float:
+        """Calculate Sharpe ratio from Backtrader analyzers."""
+        if hasattr(strategy, 'analyzers') and hasattr(strategy.analyzers, 'sharpe'):
+            sharpe = strategy.analyzers.sharpe
+            try:
+                analysis = sharpe.get_analysis()
+                if isinstance(analysis, dict):
+                    if 'sharperatio' in analysis:
+                        ratio = analysis['sharperatio']
+                        if ratio is not None and not np.isnan(ratio) and not np.isinf(ratio):
+                            return float(ratio)
+            except Exception:
+                pass
+        
+        return 0.0
 
