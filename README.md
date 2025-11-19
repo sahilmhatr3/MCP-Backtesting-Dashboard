@@ -2,6 +2,20 @@
 
 A modular dashboard for equity strategy backtesting, integrating market data, news sentiment analysis, and strategy performance insights using a multi-adapter architecture.
 
+## 
+
+![Dashboard Home](images/BacktestDash-Home.png)
+
+### Strategy Visualization
+Interactive charts with several technical indicators.
+
+![Bollinger Bands Strategy](images/BacktestDash-Bollinger.png)
+
+### Strategy Insights & Analysis
+Comprehensive performance analysis with intelligent insights and visualizations.
+
+![Strategy Insights](images/BacktestDash-StrategyInsights.png)
+
 ## Features
 
 - Multi-source data integration (market prices via yfinance, news scraping)
