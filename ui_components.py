@@ -3,9 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Dict, Optional, List
-import io
+
 from llm.openai_client import OpenAIClient
-from strategies.prebuilt import MovingAverageCrossover, RSIStrategy
 
 
 def render_metrics(stats: Dict) -> None:
@@ -586,17 +585,259 @@ def render_sentiment_details(sentiment_data: Optional[List[dict]], ticker: Optio
         st.info("No articles found with the selected filter.")
 
 
-def render_ai_insights(stats: Dict, trade_log: Optional[pd.DataFrame], sentiment_data: Optional[list]) -> None:
-    """Render strategy insights section."""
+def _create_cumulative_pnl_chart(trade_log: pd.DataFrame, height: int = 200) -> Optional[go.Figure]:
+    """Create cumulative PnL chart."""
+    if 'exit_date' not in trade_log.columns or 'pnl' not in trade_log.columns:
+        return None
+    try:
+        trade_log_copy = trade_log.copy()
+        trade_log_copy['exit_date'] = pd.to_datetime(trade_log_copy['exit_date'], errors='coerce')
+        trade_log_copy = trade_log_copy.sort_values('exit_date')
+        trade_log_copy['cumulative_pnl'] = trade_log_copy['pnl'].cumsum()
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=trade_log_copy['exit_date'],
+            y=trade_log_copy['cumulative_pnl'],
+            mode='lines+markers',
+            name='Cumulative PnL',
+            line=dict(color='#2ecc71', width=2),
+            marker=dict(size=4)
+        ))
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.update_layout(
+            title="Cumulative PnL Over Time",
+            xaxis_title="Date",
+            yaxis_title="Cumulative PnL ($)",
+            height=height,
+            showlegend=True,
+            hovermode='x unified',
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        return fig
+    except Exception:
+        return None
+
+
+def _create_trade_distribution_chart(trade_log: pd.DataFrame, height: int = 200) -> Optional[go.Figure]:
+    """Create trade distribution chart."""
+    if 'pnl' not in trade_log.columns:
+        return None
+    try:
+        winning = len(trade_log[trade_log['pnl'] > 0])
+        losing = len(trade_log[trade_log['pnl'] < 0])
+        neutral = len(trade_log[trade_log['pnl'] == 0])
+        
+        fig = go.Figure(data=[
+            go.Bar(
+                x=['Winning', 'Losing', 'Neutral'],
+                y=[winning, losing, neutral],
+                marker_color=['#2ecc71', '#e74c3c', '#95a5a6'],
+                text=[winning, losing, neutral],
+                textposition='auto'
+            )
+        ])
+        fig.update_layout(
+            title="Trade Distribution",
+            xaxis_title="Trade Type",
+            yaxis_title="Number of Trades",
+            height=height,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        return fig
+    except Exception:
+        return None
+
+
+def _create_duration_chart(trade_log: pd.DataFrame, height: int = 200) -> Optional[go.Figure]:
+    """Create trade duration distribution chart."""
+    if 'entry_date' not in trade_log.columns or 'exit_date' not in trade_log.columns:
+        return None
+    try:
+        trade_log_copy = trade_log.copy()
+        trade_log_copy['entry_date'] = pd.to_datetime(trade_log_copy['entry_date'], errors='coerce')
+        trade_log_copy['exit_date'] = pd.to_datetime(trade_log_copy['exit_date'], errors='coerce')
+        trade_log_copy['duration'] = (trade_log_copy['exit_date'] - trade_log_copy['entry_date']).dt.days
+        trade_log_copy = trade_log_copy[trade_log_copy['duration'] >= 0]
+        
+        if trade_log_copy.empty:
+            return None
+        
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=trade_log_copy['duration'],
+            nbinsx=20,
+            marker_color='#3498db',
+            opacity=0.7
+        ))
+        fig.update_layout(
+            title="Trade Duration Distribution",
+            xaxis_title="Duration (days)",
+            yaxis_title="Frequency",
+            height=height,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        return fig
+    except Exception:
+        return None
+
+
+def _create_monthly_pnl_chart(trade_log: pd.DataFrame, height: int = 200) -> Optional[go.Figure]:
+    """Create monthly PnL breakdown chart."""
+    if 'exit_date' not in trade_log.columns or 'pnl' not in trade_log.columns:
+        return None
+    try:
+        trade_log_copy = trade_log.copy()
+        trade_log_copy['exit_date'] = pd.to_datetime(trade_log_copy['exit_date'], errors='coerce')
+        trade_log_copy = trade_log_copy.dropna(subset=['exit_date'])
+        trade_log_copy['month'] = trade_log_copy['exit_date'].dt.to_period('M').astype(str)
+        monthly_pnl = trade_log_copy.groupby('month')['pnl'].sum().reset_index()
+        
+        if monthly_pnl.empty:
+            return None
+        
+        colors = ['#2ecc71' if x > 0 else '#e74c3c' for x in monthly_pnl['pnl']]
+        fig = go.Figure(data=[
+            go.Bar(
+                x=monthly_pnl['month'],
+                y=monthly_pnl['pnl'],
+                marker_color=colors,
+                text=[f"${x:,.0f}" for x in monthly_pnl['pnl']],
+                textposition='auto'
+            )
+        ])
+        fig.update_layout(
+            title="Monthly PnL Breakdown",
+            xaxis_title="Month",
+            yaxis_title="PnL ($)",
+            height=height,
+            showlegend=False,
+            xaxis_tickangle=-45,
+            margin=dict(l=40, r=40, t=50, b=60)
+        )
+        return fig
+    except Exception:
+        return None
+
+
+def _create_pnl_distribution_chart(trade_log: pd.DataFrame, height: int = 200) -> Optional[go.Figure]:
+    """Create PnL distribution histogram."""
+    if 'pnl' not in trade_log.columns:
+        return None
+    try:
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=trade_log['pnl'],
+            nbinsx=30,
+            marker_color='#9b59b6',
+            opacity=0.7
+        ))
+        fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.update_layout(
+            title="PnL Distribution",
+            xaxis_title="PnL ($)",
+            yaxis_title="Frequency",
+            height=height,
+            showlegend=False,
+            margin=dict(l=40, r=40, t=50, b=40)
+        )
+        return fig
+    except Exception:
+        return None
+
+
+def render_ai_insights(stats: Dict, trade_log: Optional[pd.DataFrame], sentiment_data: Optional[list], strategy_name: Optional[str] = None, strategy_params: Optional[Dict] = None) -> None:
+    """Render strategy insights section with collapsible visualizations and AI analysis panel."""
     st.subheader("Strategy Insights")
     
-    if st.button("Generate Analysis", type="primary"):
-        try:
-            client = OpenAIClient()
-            explanation = client.explain_results(stats, trade_log, sentiment_data)
-            st.markdown(explanation)
-        except Exception as e:
-            st.error(f"Error generating insights: {str(e)}")
+    if trade_log is None or trade_log.empty:
+        st.info("No trade data available for analysis.")
+        return
+    
+    main_col1, main_col2 = st.columns([2, 1])
+    
+    with main_col1:
+        st.markdown("#### Performance Visualizations")
+        st.caption("Click on any chart tile to expand and view full details.")
+        
+        viz_col1, viz_col2 = st.columns(2)
+        
+        with viz_col1:
+            fig_small = _create_cumulative_pnl_chart(trade_log, height=180)
+            if fig_small:
+                with st.expander("Cumulative PnL Over Time", expanded=False):
+                    fig_large = _create_cumulative_pnl_chart(trade_log, height=450)
+                    if fig_large:
+                        st.plotly_chart(fig_large, use_container_width=True)
+                st.plotly_chart(fig_small, use_container_width=True, key="cumulative_preview")
+            
+            fig_small = _create_duration_chart(trade_log, height=180)
+            if fig_small:
+                with st.expander("Trade Duration Distribution", expanded=False):
+                    fig_large = _create_duration_chart(trade_log, height=450)
+                    if fig_large:
+                        st.plotly_chart(fig_large, use_container_width=True)
+                st.plotly_chart(fig_small, use_container_width=True, key="duration_preview")
+        
+        with viz_col2:
+            fig_small = _create_trade_distribution_chart(trade_log, height=180)
+            if fig_small:
+                with st.expander("Trade Distribution", expanded=False):
+                    fig_large = _create_trade_distribution_chart(trade_log, height=450)
+                    if fig_large:
+                        st.plotly_chart(fig_large, use_container_width=True)
+                st.plotly_chart(fig_small, use_container_width=True, key="distribution_preview")
+            
+            fig_small = _create_monthly_pnl_chart(trade_log, height=180)
+            if fig_small:
+                with st.expander("Monthly PnL Breakdown", expanded=False):
+                    fig_large = _create_monthly_pnl_chart(trade_log, height=450)
+                    if fig_large:
+                        st.plotly_chart(fig_large, use_container_width=True)
+                st.plotly_chart(fig_small, use_container_width=True, key="monthly_preview")
+        
+        fig_small = _create_pnl_distribution_chart(trade_log, height=180)
+        if fig_small:
+            with st.expander("PnL Distribution", expanded=False):
+                fig_large = _create_pnl_distribution_chart(trade_log, height=450)
+                if fig_large:
+                    st.plotly_chart(fig_large, use_container_width=True)
+            st.plotly_chart(fig_small, use_container_width=True, key="pnl_dist_preview")
+    
+    with main_col2:
+        st.markdown("#### Intelligent Insights")
+        if 'ai_insights_generated' not in st.session_state:
+            st.session_state.ai_insights_generated = False
+        if 'ai_insights_text' not in st.session_state:
+            st.session_state.ai_insights_text = ""
+        
+        if st.button("Generate Analysis", type="primary", use_container_width=True):
+            with st.spinner("Generating analysis..."):
+                try:
+                    client = OpenAIClient()
+                    explanation = client.explain_results(
+                        stats, 
+                        trade_log, 
+                        sentiment_data,
+                        strategy_name,
+                        strategy_params
+                    )
+                    st.session_state.ai_insights_text = explanation
+                    st.session_state.ai_insights_generated = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+                    st.session_state.ai_insights_generated = False
+        
+        st.markdown("---")
+        
+        if st.session_state.ai_insights_generated and st.session_state.ai_insights_text:
+            st.markdown("**Analysis Report:**")
+            st.markdown(st.session_state.ai_insights_text)
+        else:
+            st.info("Click 'Generate Analysis' to get AI-powered insights on your strategy performance.")
 
 
 def render_export_options(stats: Dict, trade_log: Optional[pd.DataFrame]) -> None:

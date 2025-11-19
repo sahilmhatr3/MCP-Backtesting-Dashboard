@@ -25,12 +25,6 @@ sudo apt install -y python3.12-venv python3-pip
 
 ### Installation
 
-**Option 1: Automated Setup**
-```bash
-./setup.sh
-```
-
-**Option 2: Manual Setup**
 ```bash
 # Create virtual environment
 python3 -m venv venv

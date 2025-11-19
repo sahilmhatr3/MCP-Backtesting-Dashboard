@@ -374,7 +374,13 @@ def main():
             )
             st.markdown("---")
         
-        ui_components.render_ai_insights(stats, trade_log, st.session_state.get("sentiment_data"))
+        ui_components.render_ai_insights(
+            stats, 
+            trade_log, 
+            st.session_state.get("sentiment_data"),
+            config["strategy"],
+            st.session_state.strategy_params
+        )
         st.markdown("---")
         
         ui_components.render_export_options(stats, trade_log)
